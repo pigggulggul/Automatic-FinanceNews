@@ -1,4 +1,4 @@
-# Automatic MarketMove 📈
+# Automatic FinanceNews 📈
 
 매일 자동으로 시장 뉴스를 분석하고 Notion에 인사이트를 기록하는 시스템입니다.
 
