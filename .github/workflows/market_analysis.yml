@@ -3,7 +3,7 @@ name: Automatic Market Analysis
 on:
   workflow_dispatch:  # 수동 실행 가능
   schedule:
-    - cron: '0 14 * * 1-5'  # 월-금 오후 11시 (한국 시간, UTC+9)
+    - cron: '0 21 * * 1-5'  # 월-금 아침 6시 (한국 시간, UTC+9)
 
 jobs:
   analyze-market:
