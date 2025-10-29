@@ -1,6 +1,7 @@
-google-generativeai>=0.3.0
-python-dotenv>=1.0.0
-notion-client>=2.0.0
+packaging
+google-generativeai==0.8.5
+notion-client==2.5.0
+python-dotenv
 feedparser>=6.0.0
 yfinance>=0.2.0
 requests>=2.31.0
