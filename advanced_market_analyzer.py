@@ -47,7 +47,7 @@ def get_batch_analysis_prompt(articles):
     article_inputs = []
     for i, article in enumerate(articles):
         article_inputs.append(f"<article index=\"{i}\"><title>{article['title']}</title><content>{article['summary']}</content></article>")
-
+    
     return f'''
     You are a senior equity analyst at a top-tier investment firm. Your job is to analyze news and predict short-term stock price movements with high accuracy.
 
@@ -57,22 +57,27 @@ def get_batch_analysis_prompt(articles):
     ### Analysis Framework:
     For each article, perform this structured analysis:
 
-    1. **Materiality Check**: Does this news contain concrete, actionable information that could move stock prices? Skip generic/rehashed content.
+    1. **Materiality Check**: Does this news contain concrete, actionable information? Skip generic/rehashed content.
 
     2. **Causal Analysis**:
-       - What specific event occurred? (earnings beat/miss, product launch, regulatory action, etc.)
-       - What is the magnitude? (revenue numbers, user growth %, market share change)
-       - What is the market expectation vs. reality gap?
+        - What specific event occurred? (earnings beat/miss, product launch, etc.)
+        - What is the magnitude? (revenue numbers, user growth %)
+        - What is the market expectation vs. reality gap?
 
-    3. **Price Impact Logic**:
-       - Bullish catalysts: Revenue/earnings beat, market share gains, positive regulatory news, strategic wins
-       - Bearish catalysts: Guidance cuts, competitive losses, regulatory headwinds, operational failures
-       - Neutral: No new information, already priced in, or offsetting factors
+    3. **Pre-Mortem Analysis (CRITICAL STEP)**:
+        - Form an initial prediction (Positive/Negative).
+        - **Then, explicitly state the top 3 strongest arguments or risk factors for why your initial prediction might be WRONG.** This analysis will populate the `pre_mortem_risks` field.
 
-    4. **Confidence Calibration**:
-       - High (8-10): Clear catalyst + quantifiable impact + immediate relevance
-       - Medium (5-7): Important but lacks specifics, or mixed signals
-       - Low (1-4): Speculative, opinion-based, or minor significance
+    4. **Price Impact Logic & Final Sentiment**:
+        - Bullish: Clear, positive catalyst (revenue beat, strategic win).
+        - Bearish: Clear, negative catalyst (guidance cut, regulatory headwind).
+        - **Neutral: [NEW RULE] Classify as 'Neutral' if the predicted change is marginal (e.g., within a +/- 0.5% range), if signals are mixed (e.g., revenue beat but guidance miss), or if there is no clear catalyst.**
+
+    5. **Confidence Calibration**:
+        - Based on your Pre-Mortem. If `pre_mortem_risks` are strong, confidence must be lower.
+        - High (8-10): Clear catalyst + quantifiable impact + low-risk pre-mortem.
+        - Medium (5-7): Important but lacks specifics, or pre-mortem identifies significant counter-arguments.
+        - Low (1-4): Speculative, opinion-based, or high-risk pre-mortem.
 
     ### Output Format (JSON):
     {{
@@ -81,25 +86,30 @@ def get_batch_analysis_prompt(articles):
       "mentioned_tickers": ["AAPL", "MSFT"],
       "sentiment": "Positive|Negative|Neutral",
       "conviction_score": <1-10>,
-      "summary": "한글로 3-4문장 분석:
+      "summary": "한글로 3문장 분석:
         1) 핵심 사건: [구체적 수치/사실 포함]
         2) 주가 영향 논리: [왜 오르거나 내릴 것인가]
-        3) 시간 프레임: [단기/중기 영향]
-        4) 리스크 요인: [반대 시나리오가 있다면]"
+        3) 시간 프레임: [단기/중기 영향]",
+      "pre_mortem_risks": "KOREAN: 이 예측이 틀릴 수 있는 가장 강력한 이유 3가지 (Pre-mortem 분석 결과)"
     }}
 
     ### Quality Standards:
-    - ❌ Bad: "애플의 신제품 출시로 긍정적 전망" (너무 모호함)
-    - ✅ Good: "애플 아이폰15 사전예약 전년比 20% 증가. 단기 매출 상승 기대되나, 마진 압박 우려로 확신도 7점"
-
-    - ❌ Bad: "테슬라 CEO 발언으로 주가 변동 예상" (인과관계 불명확)
-    - ✅ Good: "머스크 'Q4 생산 목표 50만대 → 40만대 하향'. 수익성 악화 신호로 단기 하락 압력 예상, 확신도 8점"
+    - ❌ Bad: "애플의 신제품 출시로 긍정적 전망"
+    - ✅ Good (Example Output):
+      {{
+        "article_index": 0,
+        "korean_title": "애플, 아이폰15 사전예약 전년 대비 20% 증가",
+        "mentioned_tickers": ["AAPL"],
+        "sentiment": "Positive",
+        "conviction_score": 7,
+        "summary": "1) 핵심 사건: 아이폰15 사전예약이 전년 대비 20% 증가하며 초기 수요 강세 확인.\n2) 주가 영향 논리: 단기 매출 기대감 상승으로 주가에 긍정적.\n3) 시간 프레임: 단기 (다음 분기 실적 발표 전)",
+        "pre_mortem_risks": "1) 거시경제 위축으로 실제 판매 전환율이 낮을 수 있음.\n2) 높은 부품 비용으로 인해 마진이 압박받을 수 있음.\n3) 해당 뉴스가 이미 시장 기대치에 선반영되었을 가능성."
+      }}
 
     ### Critical Rules:
-    - Only analyze articles mentioning **specific publicly traded tickers**
-    - Avoid recency bias: Recent news ≠ automatically more important
-    - Distinguish between "company did X" (fact) vs. "analyst says X" (opinion)
-    - If multiple conflicting signals, explain which dominates and why
+    - Only analyze articles mentioning **specific publicly traded tickers**.
+    - Distinguish between "company did X" (fact) vs. "analyst says X" (opinion).
+    - **[NEW RULE] Your `conviction_score` MUST reflect your `pre_mortem_risks`. If `pre_mortem_risks` are significant, the score CANNOT be 9 or 10.**
 
     Return ONLY a valid JSON array. No explanations outside JSON.
     '''
@@ -112,12 +122,20 @@ def get_weekly_feedback_and_prompt_improvement_prompt(failed_predictions, succes
     You are an AI performance auditor. Analyze prediction accuracy and suggest improvements.
 
     ### Performance Data:
-    - **Failed Predictions**: {str(failed_predictions)}
+    - **Failed Predictions (with pre-mortem)**: 
+      - Each object shows the prediction that failed, and the `pre_mortem` analysis the AI wrote *before* it failed.
+      - {str(failed_predictions)}
     - **Successful Predictions**: {str(successful_predictions)}
     - **Accuracy**: {accuracy:.1f}%
 
     ### Your Task:
-    Analyze patterns and generate a JSON report. Only suggest prompt improvements if you find **systematic, recurring failures** (not random errors).
+    Analyze patterns and generate a JSON report. Only suggest improvements if you find **systematic, recurring failures**.
+
+    **CRITICAL ANALYSIS for `failure_analysis`**:
+    For each failure, check its `pre_mortem` field.
+    1.  **"Ignored Risk"**: Did the AI correctly identify the risk in its `pre_mortem` but still make the wrong call (e.g., high conviction)?
+    2.  **"Missed Risk"**: Was the failure caused by a risk the AI completely failed to identify in its `pre_mortem`?
+    Your root cause analysis MUST differentiate between these two failure types.
 
     **JSON Format:**
     {{
@@ -128,9 +146,9 @@ def get_weekly_feedback_and_prompt_improvement_prompt(failed_predictions, succes
         "key_takeaway": "One-sentence summary in KOREAN"
       }},
       "failure_analysis": {{
-        "recurring_theme": "What common mistake pattern exists? (KOREAN)",
+        "recurring_theme": "What common mistake pattern exists? (e.g., 'Ignored Risk', 'Missed Risk') (KOREAN)",
         "examples": ["TSLA", "AAPL"],
-        "root_cause": "Why did the AI fail? (KOREAN)"
+        "root_cause": "Why did the AI fail? Did it ignore its own pre-mortem? (KOREAN)"
       }},
       "success_analysis": {{
         "common_pattern": "What makes successful predictions accurate? (KOREAN)",
@@ -227,13 +245,14 @@ def save_analysis_to_notion(analysis_results):
 
         article = result.get('original_article', {})
 
-        # 간소화된 속성 (필수 필드만)
+        # [!] "AI Pre-mortem" 속성 추가 (Notion DB에 해당 속성이 있어야 함)
         properties = {
             "기사 제목": {"title": [{"text": {"content": result.get("korean_title", article.get('title', 'N/A'))}}]},
             "언급된 종목": {"rich_text": [{"text": {"content": ", ".join(result.get("mentioned_tickers", []))}}]},
             "감성분석": {"select": {"name": result.get("sentiment", "Neutral")}},
             "AI 확신 점수": {"number": result.get("conviction_score", 0)},
             "AI 분석 요약": {"rich_text": [{"text": {"content": result.get("summary", "")}}]},
+            "AI Pre-mortem": {"rich_text": [{"text": {"content": result.get("pre_mortem_risks", "")}}]} ,
             "URL": {"url": article.get('link', "")}
         }
 
@@ -252,6 +271,8 @@ def save_analysis_to_notion(analysis_results):
             print(f"  ✗ Notion 저장 오류: {result.get('korean_title', '')} - {e}")
 
     print(f"✓ 총 {count}개의 유의미한 분석을 Notion에 저장했습니다.")
+
+    
 def run_daily_feedback_check():
     print("\n[단계 5/6] 일일 피드백 검증 시작...")
     yesterday = (datetime.now() - timedelta(days=1)).isoformat()
@@ -270,6 +291,9 @@ def run_daily_feedback_check():
                 tickers_text = props.get("언급된 종목", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "")
                 predicted_sentiment = props.get("감성분석", {}).get("select", {}).get("name")
                 
+                # [!] 원본 Pre-mortem 텍스트 읽어오기
+                pre_mortem_text = props.get("AI Pre-mortem", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "")
+                
                 if not tickers_text or predicted_sentiment not in ["Positive", "Negative"]:
                     continue
 
@@ -284,12 +308,14 @@ def run_daily_feedback_check():
                 
                 correct = (predicted_sentiment == "Positive" and actual_change > 0) or (predicted_sentiment == "Negative" and actual_change < 0)
                 
+                # [!] "Pre-mortem 원본" 속성 추가 (피드백 DB에 해당 속성이 있어야 함)
                 feedback_properties = {
                     "종목": {"title": [{"text": {"content": ticker}}]},
                     "예측 방향": {"select": {"name": predicted_sentiment}},
                     "실제 변동": {"number": round(actual_change, 2)},
                     "예측 정확": {"checkbox": bool(correct)}, # numpy.bool_를 표준 bool로 변환
-                    "원인 분석": {"rich_text": [{"text": {"content": "성공: 예측과 실제 움직임 일치" if correct else "실패: 예측과 실제 움직임 불일치"}}]}
+                    "원인 분석": {"rich_text": [{"text": {"content": "성공: 예측과 실제 움직임 일치" if correct else "실패: 예측과 실제 움직임 불일치"}}]},
+                    "Pre-mortem 원본": {"rich_text": [{"text": {"content": pre_mortem_text}}]} # [!] Pre-mortem 데이터 복사
                 }
                 notion.pages.create(parent={"database_id": NOTION_FEEDBACK_DB_ID}, properties=feedback_properties)
                 api_call_counter['notion'] += 1
@@ -318,7 +344,8 @@ def run_weekly_report_generation():
                 "ticker": props.get("종목", {}).get("title", [{}])[0].get("text", {}).get("content", ""),
                 "prediction": props.get("예측 방향", {}).get("select", {}).get("name"),
                 "actual_change": props.get("실제 변동", {}).get("number"),
-                "reason": props.get("원인 분석", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "")
+                "reason": props.get("원인 분석", {}).get("rich_text", [{}])[0].get("text", {}).get("content", ""),
+                "pre_mortem": props.get("Pre-mortem 원본", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "") # [!] Pre-mortem 데이터 추가
             }
             if props.get("예측 정확", {}).get("checkbox"):
                 successful_predictions.append(prediction)
@@ -326,6 +353,11 @@ def run_weekly_report_generation():
                 failed_predictions.append(prediction)
         
         print(f"  - 지난 주 예측 결과: {len(successful_predictions)}개 성공, {len(failed_predictions)}개 실패")
+        
+        # 데이터가 없으면 리포트 생성 스킵
+        if not successful_predictions and not failed_predictions:
+            print("  - 분석할 피드백 데이터가 충분하지 않습니다. 리포트를 건너뜁니다.")
+            return
 
         prompt = get_weekly_feedback_and_prompt_improvement_prompt(failed_predictions, successful_predictions)
         response = gemini_model.generate_content(prompt)
@@ -350,7 +382,7 @@ def run_weekly_report_generation():
                 "보고서 기간": {"title": [{"text": {"content": report_title}}]},
                 "정확도": {"rich_text": [{"text": {"content": summary.get("accuracy_rate", "N/A")}}]},
                 "핵심 요약": {"rich_text": [{"text": {"content": summary.get("key_takeaway", "N/A")}}]},
-                "실패 원인 분석": {"rich_text": [{"text": {"content": f"{failure.get('recurring_theme', 'N/A')}\n근본 원인: {failure.get('root_cause', 'N/A')}"}}]},
+                "실패 원인 분석": {"rich_text": [{"text": {"content": f"테마: {failure.get('recurring_theme', 'N/A')}\n근본 원인: {failure.get('root_cause', 'N/A')}"}}]},
                 "성공 비결 분석": {"rich_text": [{"text": {"content": success.get("common_pattern", "N/A")}}]},
                 "개선된 프롬프트 제안": {"rich_text": [{"text": {"content": improvement.get("solution", "N/A")}}]}
             }
