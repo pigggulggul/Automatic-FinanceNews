@@ -32,7 +32,7 @@ if not all([NOTION_API_KEY, GEMINI_API_KEY, NOTION_DATABASE_ID, NOTION_FEEDBACK_
 # 클라이언트 초기화
 notion = Client(auth=NOTION_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-3-flash')
+gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 
 # RSS 피드 소스
 RSS_FEEDS = {
